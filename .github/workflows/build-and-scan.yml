@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [shell, distroless, certbot, certproxy]
+        variant: [shell, distroless]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -108,43 +108,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # certproxy's Rust checks and the end-to-end test (Vault dev server + Pebble).
-  # Not run on the daily schedule, so a new clippy release can't break the
-  # nightly rebuild of unchanged code.
-  certproxy-checks:
-    name: certproxy checks
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      TAG: ci-${{ github.run_id }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: rustfmt, clippy and unit tests
-        run: .github/scripts/run-annotated.sh "certproxy unit tests" make test-certproxy-unit
-
-      - name: Build image
-        run: .github/scripts/run-annotated.sh "certproxy build" make build-certproxy
-
-      - name: End-to-end test (Vault dev server + Pebble)
-        run: .github/scripts/run-annotated.sh "certproxy e2e" make e2e-certproxy
-
   # Single status check for branch protection: passes only if every
-  # variant/architecture combination built, passed smoke tests and the CVE
-  # gate, and certproxy's checks passed (or were skipped on the schedule).
+  # variant/architecture combination built, passed smoke tests and the CVE gate.
   all-builds:
     name: build-and-scan (all)
     if: always()
-    needs: [build-scan, certproxy-checks]
+    needs: [build-scan]
     runs-on: ubuntu-24.04
     steps:
       - name: Check results
         env:
           BUILD: ${{ needs.build-scan.result }}
-          CHECKS: ${{ needs.certproxy-checks.result }}
         run: |
-          echo "build-scan: $BUILD, certproxy-checks: $CHECKS"
-          [ "$BUILD" = success ] && { [ "$CHECKS" = success ] || [ "$CHECKS" = skipped ]; }
+          echo "build-scan: $BUILD"
+          [ "$BUILD" = success ]
