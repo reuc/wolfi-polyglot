@@ -220,9 +220,45 @@ The workflow runs:
 
 Builds always use `NO_CACHE=1` so they pick up the latest Wolfi packages. A job fails if the build, the architecture check, the smoke test or the CVE gate fails. Each job writes a table of CVE counts and findings to the run summary and uploads `reports/` as an artifact named `grype-<variant>-<arch>`, kept for 30 days.
 
-The workflow only builds and scans. It doesn't publish images.
+The workflow only builds and scans. Publishing is done by `publish.yml` (see [Publishing to Docker Hub](#publishing-to-docker-hub)).
 
 To make the gate block merges, add **`build-and-scan (all)`** as a required status check in the branch protection rule for `main`. That one check passes only when all four jobs pass.
+
+## Publishing to Docker Hub
+
+`.github/workflows/publish.yml` publishes both variants as **`docker.io/<DOCKER_USER>/wolfi-polyglot`** for `linux/amd64` and `linux/arm64`, from `main`.
+
+**When it runs:**
+- on every push to `main` that touches a Dockerfile, the smoke test, the Makefile, `.dockerignore` or the workflow
+- daily at 07:41 UTC, so new Wolfi security fixes are published without a code change
+- on demand (**Actions → publish → Run workflow**)
+- on pull requests into `main` that change the workflow, as a **dry run**: the gates run, but nothing is logged in or pushed
+
+**Gates:** each variant is built natively on each architecture, then must pass the architecture check, the smoke test and the grype CVE gate. Only the **exact image that passed** is pushed. If any of the four jobs fails, nothing is published.
+
+**What gets pushed:**
+
+| Item | Shell variant | Distroless variant | Signed / attested |
+|---|---|---|---|
+| per-architecture image | `:sha-<commit>-<arch>` | `:sha-<commit>-distroless-<arch>` | SBOM attestation (SPDX) + cosign signature |
+| multi-arch index | `:latest`, `:YYYYMMDD`, `:sha-<commit>` | `:latest-distroless`, `:YYYYMMDD-distroless`, `:sha-<commit>-distroless` | SLSA build provenance + cosign signature |
+
+The daily run moves `latest*` and `sha-<commit>*` to the new build. **Pin by digest**, for example `FROM docker.io/<DOCKER_USER>/wolfi-polyglot:20261107-distroless@sha256:<digest>`; Dependabot's `docker` ecosystem keeps both the date tag and the digest current. The digests are shown in each run's summary.
+
+**Setup (Settings → Secrets and variables → Actions):**
+- **`DOCKER_USER`:** your Docker Hub username or organization. As a *variable* it shows in run summaries; as a *secret* it's masked.
+- **`DOCKER_TOKEN`:** a Docker Hub **personal access token** with *Read & Write* scope. Don't use your account password.
+- Docker Hub creates the `wolfi-polyglot` repository on the first push. Check its visibility (public or private) afterwards.
+
+**Verify an image before using it:**
+
+```bash
+IMAGE=docker.io/<DOCKER_USER>/wolfi-polyglot@sha256:<digest>
+cosign verify "$IMAGE" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github.com/reuc/wolfi-polyglot/\.github/workflows/publish\.yml@'
+gh attestation verify "oci://$IMAGE" -R reuc/wolfi-polyglot
+```
 
 ## Smoke tests
 
@@ -246,7 +282,8 @@ The tests run with `--network=none`, a read-only root filesystem and all capabil
 │   ├── scripts/run-annotated.sh # turns failures into workflow annotations
 │   └── workflows/
 │       ├── build-and-scan.yml # CI: build, test, CVE gate
-│       └── codeql.yml         # CodeQL (actions, python)
+│       ├── codeql.yml         # CodeQL (actions, python)
+│       └── publish.yml        # gated, signed publish to Docker Hub
 ├── Dockerfile             # shell variant
 ├── Dockerfile.distroless  # no-shell variant
 ├── Makefile               # build / test / scan / sbom
